@@ -1,2 +1,1 @@
-# pki-2fa-microservice
-pki-2fa-microservice
+# PKI 2FA Microservice
