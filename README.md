@@ -31,35 +31,6 @@ The system decrypts a deterministic encrypted seed, generates time-based OTPs, v
 - **Verification Tolerance:** ±30 seconds  
 
 ---
-
-## 🗂️ Project Structure
-
-pki-2fa-microservice/
-│
-├── app/
-│ ├── main.py
-│ ├── crypto_utils.py
-│ └── totp_utils.py
-│
-├── scripts/
-│ ├── log_2fa_cron.py
-│ └── generate_commit_proof.py
-│
-├── cron/
-│ └── 2fa-cron
-│
-├── student_private.pem
-├── student_public.pem
-├── instructor_public.pem
-│
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── .gitignore
-├── .gitattributes
-└── README.md
-
-
 ---
 
 ## 🔒 Security Notes
