@@ -1,0 +1,1 @@
+* * * * * echo 'cron placeholder' >> /cron/last_code.txt 2>&1
