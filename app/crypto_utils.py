@@ -1,71 +1,149 @@
-import base64
 from pathlib import Path
+import base64
+import binascii
 
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.exceptions import InvalidSignature
 
 
+# =========================
+# Key File Paths
+# =========================
+
+# Base directory = project root (pki-2fa-microservice)
 BASE_DIR = Path(__file__).resolve().parent.parent
-PRIVATE_KEY_PATH = BASE_DIR / "student_private.pem"
+
+STUDENT_PRIVATE_KEY_PATH = BASE_DIR / "student_private.pem"
+STUDENT_PUBLIC_KEY_PATH = BASE_DIR / "student_public.pem"
+INSTRUCTOR_PUBLIC_KEY_PATH = BASE_DIR / "instructor_public.pem"
 
 
-def load_private_key():
-    with open(PRIVATE_KEY_PATH, "rb") as f:
+# =========================
+# Key Loaders
+# =========================
+
+def load_student_private_key():
+    """
+    Load the student's RSA private key from student_private.pem
+    """
+    with open(STUDENT_PRIVATE_KEY_PATH, "rb") as f:
         private_key = serialization.load_pem_private_key(
             f.read(),
-            password=None
+            password=None,
         )
     return private_key
-def decrypt_seed(encrypted_seed_b64: str, private_key) -> str:
-    """
-    Decrypt base64-encoded encrypted seed using RSA/OAEP-SHA256.
 
-    Args:
-        encrypted_seed_b64: Base64-encoded ciphertext
-        private_key: RSA private key object
+
+def load_student_public_key():
+    """
+    Load the student's RSA public key from student_public.pem
+    """
+    with open(STUDENT_PUBLIC_KEY_PATH, "rb") as f:
+        public_key = serialization.load_pem_public_key(f.read())
+    return public_key
+
+
+def load_instructor_public_key():
+    """
+    Load the instructor's RSA public key from instructor_public.pem
+    """
+    with open(INSTRUCTOR_PUBLIC_KEY_PATH, "rb") as f:
+        public_key = serialization.load_pem_public_key(f.read())
+    return public_key
+
+
+# =========================
+# Seed Decryption (RSA/OAEP)
+# =========================
+
+def decrypt_seed(encrypted_seed_b64: str) -> str:
+    """
+    Decrypt base64-encoded encrypted seed using RSA/OAEP with SHA-256
 
     Returns:
-        Decrypted hex seed (64-character lowercase hex string)
+        64-character hexadecimal seed string
     """
-    # 1. Base64 decode the encrypted seed
     try:
-        ciphertext = base64.b64decode(encrypted_seed_b64)
-    except Exception as e:
-        raise ValueError(f"Invalid base64 for encrypted seed: {e}")
+        private_key = load_student_private_key()
 
-    # 2. RSA/OAEP decrypt with SHA-256, MGF1(SHA-256), label=None
-    try:
-        plaintext_bytes = private_key.decrypt(
-            ciphertext,
+        # 1. Base64 decode
+        encrypted_bytes = base64.b64decode(encrypted_seed_b64)
+
+        # 2. RSA/OAEP-SHA256 decryption
+        decrypted_bytes = private_key.decrypt(
+            encrypted_bytes,
             padding.OAEP(
                 mgf=padding.MGF1(algorithm=hashes.SHA256()),
                 algorithm=hashes.SHA256(),
                 label=None,
             ),
         )
+
+        # 3. Decode to string
+        hex_seed = decrypted_bytes.decode("utf-8").strip()
+
+        # 4. Validate: 64-character hex string
+        if len(hex_seed) != 64:
+            raise ValueError("Invalid seed length")
+
+        try:
+            binascii.unhexlify(hex_seed)
+        except Exception:
+            raise ValueError("Seed is not valid hex")
+
+        return hex_seed
+
     except Exception as e:
-        # This usually means wrong key or parameters
-        raise ValueError(f"RSA decryption failed: {e}")
+        raise RuntimeError("Decryption failed") from e
 
-    # 3. Decode bytes to UTF-8 string
-    try:
-        hex_seed = plaintext_bytes.decode("utf-8").strip()
-    except Exception as e:
-        raise ValueError(f"Decrypted bytes are not valid UTF-8: {e}")
 
-    # 4. Validate: must be 64-character hex string
-    if len(hex_seed) != 64:
-        raise ValueError(f"Decrypted seed length is {len(hex_seed)}, expected 64")
+# =========================
+# Commit Proof: SIGN
+# RSA-PSS with SHA-256
+# =========================
 
-    allowed = set("0123456789abcdef")
-    if any(ch not in allowed for ch in hex_seed):
-        raise ValueError("Decrypted seed contains non-hex characters")
-
-    # 5. Return hex seed
-    return hex_seed
-def decrypt_seed_with_loaded_key(encrypted_seed_b64: str) -> str:
+def sign_message(message: str) -> bytes:
     """
-    Helper that loads the private key and decrypts the seed.
+    Sign a message using RSA-PSS with SHA-256.
+
+    CRITICAL:
+    - Message must be ASCII/UTF-8 string
+    - Do NOT sign binary hex bytes
     """
-    private_key = load_private_key()
-    return decrypt_seed(encrypted_seed_b64, private_key)
+    private_key = load_student_private_key()
+
+    # Sign ASCII string, NOT bytes.fromhex
+    message_bytes = message.encode("utf-8")
+
+    signature = private_key.sign(
+        message_bytes,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
+    return signature
+
+
+# =========================
+# Commit Proof: ENCRYPT
+# RSA-OAEP with SHA-256
+# =========================
+
+def encrypt_with_instructor_public_key(data: bytes) -> bytes:
+    """
+    Encrypt data using instructor public key with RSA/OAEP-SHA256
+    """
+    public_key = load_instructor_public_key()
+
+    ciphertext = public_key.encrypt(
+        data,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+    return ciphertext
